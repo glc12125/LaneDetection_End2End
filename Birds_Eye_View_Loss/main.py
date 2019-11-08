@@ -23,7 +23,7 @@ from Dataloader.Load_Data_new import get_loader, get_homography, \
 from eval_lane import LaneEval
 from Loss_crit import define_loss_crit, polynomial 
 from Networks.LSQ_layer import Net
-from Networks.utils import define_args, save_weightmap, first_run,\
+from Networks.utils import define_args, show_weightmap, save_weightmap, first_run,\
                            mkdir_if_missing, Logger, define_init_weights,\
                            define_scheduler, define_optim, AverageMeter \
 
@@ -155,6 +155,18 @@ def main():
             print("=> no checkpoint found at '{}'".format(best_file_name))
         validate(valid_loader, model, criterion, criterion_seg, 
                 criterion_line_class, criterion_horizon, M_inv)
+        return
+    elif args.test_mode:
+        best_file_name = glob.glob(os.path.join(args.save_path, 'model_best*'))[0]
+        if os.path.isfile(best_file_name):
+            sys.stdout = Logger(os.path.join(args.save_path, 'Evaluate.txt'))
+            print("=> loading checkpoint '{}'".format(best_file_name))
+            checkpoint = torch.load(best_file_name)
+            model.load_state_dict(checkpoint['state_dict'])
+        else:
+            print("=> no checkpoint found at '{}'".format(best_file_name))
+        test(valid_loader, model, criterion, criterion_seg, 
+             criterion_line_class, criterion_horizon, M_inv)
         return
 
     # Start training from clean slate
@@ -387,6 +399,7 @@ def validate(loader, model, criterion, criterion_seg,
             try:
                 beta0, beta1, beta2, beta3, weightmap_zeros, M, \
                 output_net, outputs_line, outputs_horizon = model(input_data, args.end_to_end)
+                '''
                 beta0_np = beta0.cpu().numpy()
                 beta1_np = beta1.cpu().numpy()
                 left_lane = polynomial(beta0)
@@ -403,8 +416,8 @@ def validate(loader, model, criterion, criterion_seg,
                 print('input_data.shape: {}'.format(input_data_np.shape))
                 print('gt.shape: {}'.format(gt_np.shape))
                 print('beta0.shape: {}'.format(beta0_np.shape))
-                l_x_pts = np.arange(60, 120)
-                r_x_pts = np.arange(120, 180)
+                l_x_pts = np.arange(0, 512)
+                r_x_pts = np.arange(0, 512)
                 for index in range(input_data_np.shape[0]):
                     processed_img = input_data_np[index]
                     gt_img = gt_np[index]
@@ -418,7 +431,8 @@ def validate(loader, model, criterion, criterion_seg,
                     cv2.polylines(rgb_img,  [l_pts],  False,  (0, 255, 0),  1)
                     cv2.polylines(rgb_img,  [r_pts],  False,  (0, 255, 0),  1)
                     cv2.imshow("input image", rgb_img)
-                    cv2.waitKey(0)
+                    cv2.waitKey(1)
+                '''
 
             except RuntimeError as e:
                 print("Batch with idx {} skipped due to singular matrix".format(idx.numpy()))
@@ -508,10 +522,13 @@ def validate(loader, model, criterion, criterion_seg,
                            i+1, len(loader), loss=losses, metric=avg_area))
 
             # Plot weightmap and curves
-            if (i + 1) % 25 == 0:
+            batch_size = input_data.cpu().numpy().shape[0]
+            print('saving results for batch {}'.format(i))
+            for idx in range(batch_size):
+                print('\tsaving results for image {} of batch {}'.format(idx, i))
                 save_weightmap('valid', M, M_inv,
                                weightmap_zeros, beta0, beta1, beta2, beta3,
-                               gt0, gt1, gt2, gt3, line_pred, gt, 0, i, input_data,
+                               gt0, gt1, gt2, gt3, line_pred, gt, idx, i, input_data,
                                args.no_ortho, args.resize, args.save_path)
 
         # Compute x, y coordinates for accuracy later
@@ -534,6 +551,41 @@ def validate(loader, model, criterion, criterion_seg,
 
         return losses.avg, avg_area.avg, avg_trapezium_rule.avg, acc_hor_tot.avg, acc_line_tot.avg
 
+
+def test(loader, model, criterion, criterion_seg, 
+         criterion_line_class, criterion_horizon, M_inv, epoch=0):
+
+    # Evaluate model
+    model.eval()
+
+    # Only forward pass, hence no gradients needed
+    with torch.no_grad():
+        
+        # Start validation loop
+        for i, (input_data, gt, params, idx, gt_line, gt_horizon, index) in tqdm(enumerate(loader)):
+            if not args.no_cuda:
+                input_data, params = input_data.cuda(non_blocking=True), params.cuda(non_blocking=True)
+                input_data = input_data.float()
+            gt0, gt1, gt2, gt3 = params[:, 0, :], params[:, 1, :], params[:, 2, :], params[:, 3, :]
+            line_pred = gt_line
+            # Evaluate model
+            try:
+                beta0, beta1, beta2, beta3, weightmap_zeros, M, \
+                output_net, outputs_line, outputs_horizon = model(input_data, args.end_to_end)
+
+                # Plot weightmap and curves
+                batch_size = input_data.cpu().numpy().shape[0]
+                print('Displaying results for batch {}'.format(i))
+                for idx in range(batch_size):
+                    print('\tDisplaying results for image {} of batch {}'.format(idx, i))
+                    show_weightmap('valid', M, M_inv,
+                                   weightmap_zeros, beta0, beta1, beta2, beta3,
+                                   gt0, gt1, gt2, gt3, line_pred, gt, idx, i, input_data,
+                                   args.no_ortho, args.resize, args.save_path)
+            except RuntimeError as e:
+                print("Batch with idx {} skipped due to singular matrix".format(idx.numpy()))
+                print(e)
+                continue
 
 def save_checkpoint(state, to_copy, epoch):
     filepath = os.path.join(args.save_path, 'checkpoint_model_epoch_{}.pth.tar'.format(epoch))

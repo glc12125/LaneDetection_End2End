@@ -15,7 +15,7 @@ import torch.optim
 from torch.optim import lr_scheduler
 import torch.nn.init as init
 import matplotlib
-matplotlib.use('Agg')
+matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 from scipy.optimize import fsolve
 plt.rcParams['figure.figsize'] = (35, 30)
@@ -91,6 +91,80 @@ def define_args():
     parser.add_argument('--list', type=int, nargs='+', default=[954, 2789], help='Images you want to skip')
     return parser
 
+def draw_fitted_line(img, params, resize, color=(255,0,0)):
+    params = params.data.cpu().tolist()
+    y_stop = 0.7
+    y_prime = np.linspace(0, y_stop, 20)
+    params = [0] * (4 - len(params)) + params
+    d, a, b, c = [*params]
+    x_pred = d*(y_prime**3) + a*(y_prime)**2 + b*(y_prime) + c
+    x_pred = x_pred*(2*resize-1)
+    y_prime = (1-y_prime)*(resize-1)
+    lane = [(xcord, ycord) for (xcord, ycord) in zip(x_pred, y_prime)] 
+    img = cv2.polylines(img, [np.int32(lane)], isClosed = False, color = color,thickness = 1)
+    return img, lane
+
+def show_weightmap(train_or_val, M, M_inv, weightmap_zeros,
+                   beta0, beta1, beta2, beta3, gt_params_lhs, 
+                   gt_params_rhs, gt_params_llhs, gt_params_rrhs, line_class,
+                   gt, idx, i, images, no_ortho, resize, save_path):
+    M = M.data.cpu().numpy()[0]
+    x = np.zeros(3)
+
+    line_class = line_class[0].cpu().numpy()
+    left_lane = True if line_class[0] != 0 else False
+    right_lane = True if line_class[3] != 0 else False
+
+    wm0_zeros = weightmap_zeros.data.cpu()[idx, 0].numpy()
+    wm1_zeros = weightmap_zeros.data.cpu()[idx, 1].numpy()
+
+    im = images.permute(0, 2, 3, 1).data.cpu().numpy()[idx]
+    im_orig = np.copy(im)
+    gt_orig = gt.permute(0, 2, 3, 1).data.cpu().numpy()[idx, :, :, 0]
+    im_orig = draw_homography_points(im_orig, x, resize)
+
+    im, M_scaledup = test_projective_transform(im, resize, M)
+
+    im, _ = draw_fitted_line(im, gt_params_rhs[idx], resize, (0, 255, 0))
+    im, _ = draw_fitted_line(im, gt_params_lhs[idx], resize, (0, 255, 0))
+    im, lane0 = draw_fitted_line(im, beta0[idx], resize, (255, 0, 0))
+    im, lane1 = draw_fitted_line(im, beta1[idx], resize, (0, 0, 255))
+    if beta2 is not None:
+        im, _ = draw_fitted_line(im, gt_params_llhs[idx], resize, (0, 255, 0))
+        im, _ = draw_fitted_line(im, gt_params_rrhs[idx], resize, (0, 255, 0))
+        if left_lane:
+            im, lane2 = draw_fitted_line(im, beta2[idx], resize, (255, 255, 0))
+        if right_lane:
+            im, lane3 = draw_fitted_line(im, beta3[idx], resize, (255, 128, 0))
+
+
+    if not no_ortho:
+        im_inverse = cv2.warpPerspective(im, np.linalg.inv(M_scaledup), (2*resize, resize))
+    else:
+        im_inverse = im_orig
+
+    im_orig = np.clip(im_orig, 0, 1)
+    im_inverse = np.clip(im_inverse, 0, 1)
+    im = np.clip(im, 0, 1)
+
+    fig = plt.figure()
+    ax1 = fig.add_subplot(321)
+    ax2 = fig.add_subplot(322)
+    ax3 = fig.add_subplot(323)
+    ax4 = fig.add_subplot(324)
+    ax5 = fig.add_subplot(325)
+    ax1.imshow(im)
+    ax1.set_title('Birds eye view')
+    ax2.imshow(im_inverse)
+    ax2.set_title('Transformed birds eye view')
+    ax3.imshow(wm0_zeros/np.max(wm0_zeros)+wm1_zeros/np.max(wm1_zeros))
+    ax3.set_title('Left & Reft weight map zeros normalized')
+    ax4.imshow(im_orig)
+    ax4.set_title('Original image with homography points')
+    ax5.imshow(gt_orig)
+    ax5.set_title('Ground truth')
+    #fig.tight_layout()
+    plt.show()
 
 def save_weightmap(train_or_val, M, M_inv, weightmap_zeros,
                    beta0, beta1, beta2, beta3, gt_params_lhs, 
@@ -103,27 +177,27 @@ def save_weightmap(train_or_val, M, M_inv, weightmap_zeros,
     left_lane = True if line_class[0] != 0 else False
     right_lane = True if line_class[3] != 0 else False
 
-    wm0_zeros = weightmap_zeros.data.cpu()[0, 0].numpy()
-    wm1_zeros = weightmap_zeros.data.cpu()[0, 1].numpy()
+    wm0_zeros = weightmap_zeros.data.cpu()[idx, 0].numpy()
+    wm1_zeros = weightmap_zeros.data.cpu()[idx, 1].numpy()
 
-    im = images.permute(0, 2, 3, 1).data.cpu().numpy()[0]
+    im = images.permute(0, 2, 3, 1).data.cpu().numpy()[idx]
     im_orig = np.copy(im)
-    gt_orig = gt.permute(0, 2, 3, 1).data.cpu().numpy()[0, :, :, 0]
+    gt_orig = gt.permute(0, 2, 3, 1).data.cpu().numpy()[idx, :, :, 0]
     im_orig = draw_homography_points(im_orig, x, resize)
 
     im, M_scaledup = test_projective_transform(im, resize, M)
 
-    im, _ = draw_fitted_line(im, gt_params_rhs[0], resize, (0, 255, 0))
-    im, _ = draw_fitted_line(im, gt_params_lhs[0], resize, (0, 255, 0))
-    im, lane0 = draw_fitted_line(im, beta0[0], resize, (255, 0, 0))
-    im, lane1 = draw_fitted_line(im, beta1[0], resize, (0, 0, 255))
+    im, _ = draw_fitted_line(im, gt_params_rhs[idx], resize, (0, 255, 0))
+    im, _ = draw_fitted_line(im, gt_params_lhs[idx], resize, (0, 255, 0))
+    im, lane0 = draw_fitted_line(im, beta0[idx], resize, (255, 0, 0))
+    im, lane1 = draw_fitted_line(im, beta1[idx], resize, (0, 0, 255))
     if beta2 is not None:
-        im, _ = draw_fitted_line(im, gt_params_llhs[0], resize, (0, 255, 0))
-        im, _ = draw_fitted_line(im, gt_params_rrhs[0], resize, (0, 255, 0))
+        im, _ = draw_fitted_line(im, gt_params_llhs[idx], resize, (0, 255, 0))
+        im, _ = draw_fitted_line(im, gt_params_rrhs[idx], resize, (0, 255, 0))
         if left_lane:
-            im, lane2 = draw_fitted_line(im, beta2[0], resize, (255, 255, 0))
+            im, lane2 = draw_fitted_line(im, beta2[idx], resize, (255, 255, 0))
         if right_lane:
-            im, lane3 = draw_fitted_line(im, beta3[0], resize, (255, 128, 0))
+            im, lane3 = draw_fitted_line(im, beta3[idx], resize, (255, 128, 0))
 
 
     if not no_ortho:
@@ -144,13 +218,20 @@ def save_weightmap(train_or_val, M, M_inv, weightmap_zeros,
     ax6 = fig.add_subplot(426)
     ax7 = fig.add_subplot(427)
     ax1.imshow(im)
+    ax1.set_title('Birds eye view')
     ax2.imshow(wm0_zeros)
+    ax2.set_title('Left weight map zeros')
     ax3.imshow(im_inverse)
+    ax3.set_title('Transformed birds eye view')
     ax4.imshow(wm1_zeros)
+    ax4.set_title('Reft weight map zeros')
     ax5.imshow(wm0_zeros/np.max(wm0_zeros)+wm1_zeros/np.max(wm1_zeros))
+    ax5.set_title('Left & Reft weight map zeros normalized')
     ax6.imshow(im_orig)
+    ax6.set_title('Original image with homography points')
     ax7.imshow(gt_orig)
-    fig.savefig(save_path + '/example/{}/weight_idx-{}_batch-{}'.format(train_or_val, idx, i))
+    ax7.set_title('Ground truth')
+    fig.savefig(save_path + '/example/{}/weight_batch-{}_idx-{}'.format(train_or_val, i, idx))
     plt.clf()
     plt.close(fig)
 
@@ -162,14 +243,14 @@ def test_projective_transform(input, resize, M):
     return inp, M_scaledup
 
 
-def draw_fitted_line(img, params, resize, color=(255,0,0)):
+def draw_fitted_linedraw_fitted_line(img, params, resize, color=(255,0,0)):
     params = params.data.cpu().tolist()
     y_stop = 0.7
     y_prime = np.linspace(0, y_stop, 20)
     params = [0] * (4 - len(params)) + params
     d, a, b, c = [*params]
     x_pred = d*(y_prime**3) + a*(y_prime)**2 + b*(y_prime) + c
-    x_pred = x_pred*(2*resize-1)
+    x_pred = xdraw_fitted_line_pred*(2*resize-1)
     y_prime = (1-y_prime)*(resize-1)
     lane = [(xcord, ycord) for (xcord, ycord) in zip(x_pred, y_prime)] 
     img = cv2.polylines(img, [np.int32(lane)], isClosed = False, color = color,thickness = 1)
