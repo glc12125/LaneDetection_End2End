@@ -388,20 +388,26 @@ def validate(loader, model, criterion, criterion_seg,
                 beta0, beta1, beta2, beta3, weightmap_zeros, M, \
                 output_net, outputs_line, outputs_horizon = model(input_data, args.end_to_end)
                 beta0_np = beta0.cpu().numpy()
+                left_lane = polynomial(beta0)
+                a1_np = left_lane.a1.cpu().numpy()
+                b1_np = left_lane.b1.cpu().numpy()
+                c1_np = left_lane.c1.cpu().numpy()
                 input_data_np = input_data.cpu().numpy()
                 gt_np = gt.cpu().numpy()
                 print(type(input_data_np))
                 print('input_data.shape: {}'.format(input_data_np.shape))
                 print('gt.shape: {}'.format(gt_np.shape))
                 print('beta0.shape: {}'.format(beta0_np.shape))
+                x_pts = np.arange(5, 200)
                 for index in range(input_data_np.shape[0]):
                     processed_img = input_data_np[index]
                     gt_img = gt_np[index]
                     processed_img = np.moveaxis(processed_img, 0, -1)
                     r,g,b = cv2.split(processed_img)
                     rgb_img = cv2.merge([b,g,r])
-                    print(beta0_np)
-                    cv2.polylines(rgb_img,  [beta0_np],  False,  (0, 255, 0),  10)
+                    y_pts = a1_np[index]*x_pts**2 + b1_np[index]*x_pts*2 + c1_np[index]
+                    pts = np.vstack((x_pts,y_pts)).astype(np.int32).T
+                    cv2.polylines(rgb_img,  [pts],  False,  (0, 255, 0),  1)
                     cv2.imshow("input image", rgb_img)
                     cv2.waitKey(0)
 
