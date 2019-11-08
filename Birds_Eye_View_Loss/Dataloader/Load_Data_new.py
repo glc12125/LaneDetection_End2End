@@ -75,7 +75,10 @@ class LaneDataset(Dataset):
         line_lst = self.line_file[idx]["lines"]
 
         w, h = image.size
+        # top left height width
+        # crop to 640 x 1280 (ratio 1:2)
         image, gt = F.crop(image, h-640, 0, 640, w), F.crop(gt, h-640, 0, 640, w)
+        # resize to 256 x 512 (maintaining 1:2 ratio)
         image = F.resize(image, size=(self.resize, 2*self.resize), interpolation=Image.BILINEAR)
         gt = F.resize(gt, size=(self.resize, 2*self.resize), interpolation=Image.NEAREST)
         gt = np.asarray(gt).copy()

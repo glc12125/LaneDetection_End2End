@@ -8,6 +8,7 @@ import torch
 import torch.optim
 import torch.nn as nn
 
+import cv2
 import os
 import glob
 import time
@@ -376,16 +377,34 @@ def validate(loader, model, criterion, criterion_seg,
     with torch.no_grad():
         
         # Start validation loop
-        for i, (input, gt, params, idx, gt_line, gt_horizon, index) in tqdm(enumerate(loader)):
+        for i, (input_data, gt, params, idx, gt_line, gt_horizon, index) in tqdm(enumerate(loader)):
             if not args.no_cuda:
-                input, params = input.cuda(non_blocking=True), params.cuda(non_blocking=True)
-                input = input.float()
+                input_data, params = input_data.cuda(non_blocking=True), params.cuda(non_blocking=True)
+                input_data = input_data.float()
             gt0, gt1, gt2, gt3 = params[:, 0, :], params[:, 1, :], params[:, 2, :], params[:, 3, :]
 
             # Evaluate model
             try:
                 beta0, beta1, beta2, beta3, weightmap_zeros, M, \
-                output_net, outputs_line, outputs_horizon = model(input, args.end_to_end)
+                output_net, outputs_line, outputs_horizon = model(input_data, args.end_to_end)
+                beta0_np = beta0.cpu().numpy()
+                input_data_np = input_data.cpu().numpy()
+                gt_np = gt.cpu().numpy()
+                print(type(input_data_np))
+                print('input_data.shape: {}'.format(input_data_np.shape))
+                print('gt.shape: {}'.format(gt_np.shape))
+                print('beta0.shape: {}'.format(beta0_np.shape))
+                for index in range(input_data_np.shape[0]):
+                    processed_img = input_data_np[index]
+                    gt_img = gt_np[index]
+                    processed_img = np.moveaxis(processed_img, 0, -1)
+                    r,g,b = cv2.split(processed_img)
+                    rgb_img = cv2.merge([b,g,r])
+                    print(beta0_np)
+                    cv2.polylines(rgb_img,  [beta0_np],  False,  (0, 255, 0),  10)
+                    cv2.imshow("input image", rgb_img)
+                    cv2.waitKey(0)
+
             except RuntimeError as e:
                 print("Batch with idx {} skipped due to singular matrix".format(idx.numpy()))
                 print(e)
@@ -412,7 +431,7 @@ def validate(loader, model, criterion, criterion_seg,
                 gt = gt.cuda(non_blocking=True)
                 loss = criterion_seg(output_net, gt)
                 area = criterion(beta0, gt0) + criterion(beta1, gt1)
-                avg_area.update(area.item(), input.size(0))
+                avg_area.update(area.item(), input_data.size(0))
 
             # Horizon task & Line classification task
             if args.clas:
@@ -439,12 +458,12 @@ def validate(loader, model, criterion, criterion_seg,
             pred_right_lines = polynomial(beta1.cpu())
             trap_left = pred_left_lines.trapezoidal(gt_left_lines)
             trap_right = pred_right_lines.trapezoidal(gt_right_lines)
-            avg_trapezium_rule.update(((trap_left + trap_right)/2).mean().item(), input.size(0))
-            losses.update(loss.item(), input.size(0))
+            avg_trapezium_rule.update(((trap_left + trap_right)/2).mean().item(), input_data.size(0))
+            losses.update(loss.item(), input_data.size(0))
 
             #Write predictions to json file
             if args.clas:
-                num_el = input.size(0)
+                num_el = input_data.size(0)
                 if args.nclasses > 2:
                     params_batch = torch.cat((beta0, beta1, beta2, beta3),2) \
                         .transpose(1, 2).data.tolist()
@@ -477,7 +496,7 @@ def validate(loader, model, criterion, criterion_seg,
             if (i + 1) % 25 == 0:
                 save_weightmap('valid', M, M_inv,
                                weightmap_zeros, beta0, beta1, beta2, beta3,
-                               gt0, gt1, gt2, gt3, line_pred, gt, 0, i, input,
+                               gt0, gt1, gt2, gt3, line_pred, gt, 0, i, input_data,
                                args.no_ortho, args.resize, args.save_path)
 
         # Compute x, y coordinates for accuracy later
