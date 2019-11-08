@@ -570,9 +570,10 @@ def test(loader, model, criterion, criterion_seg,
             line_pred = gt_line
             # Evaluate model
             try:
+                start_time = time.time()
                 beta0, beta1, beta2, beta3, weightmap_zeros, M, \
                 output_net, outputs_line, outputs_horizon = model(input_data, args.end_to_end)
-
+                print("--- %s seconds/batch---" % (time.time() - start_time))
                 # Plot weightmap and curves
                 batch_size = input_data.cpu().numpy().shape[0]
                 print('Displaying results for batch {}'.format(i))
@@ -581,7 +582,7 @@ def test(loader, model, criterion, criterion_seg,
                     show_weightmap('valid', M, M_inv,
                                    weightmap_zeros, beta0, beta1, beta2, beta3,
                                    gt0, gt1, gt2, gt3, line_pred, gt, idx, i, input_data,
-                                   args.no_ortho, args.resize, args.save_path)
+                                   args.no_ortho, args.resize, False)
             except RuntimeError as e:
                 print("Batch with idx {} skipped due to singular matrix".format(idx.numpy()))
                 print(e)

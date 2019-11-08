@@ -95,9 +95,8 @@ def draw_fitted_line(img, params, resize, color=(255,0,0)):
     params = params.data.cpu().tolist()
     y_stop = 0.7
     y_prime = np.linspace(0, y_stop, 20)
-    params = [0] * (4 - len(params)) + params
-    d, a, b, c = [*params]
-    x_pred = d*(y_prime**3) + a*(y_prime)**2 + b*(y_prime) + c
+    a, b, c = [*params]
+    x_pred = a*(y_prime)**2 + b*(y_prime) + c
     x_pred = x_pred*(2*resize-1)
     y_prime = (1-y_prime)*(resize-1)
     lane = [(xcord, ycord) for (xcord, ycord) in zip(x_pred, y_prime)] 
@@ -107,7 +106,7 @@ def draw_fitted_line(img, params, resize, color=(255,0,0)):
 def show_weightmap(train_or_val, M, M_inv, weightmap_zeros,
                    beta0, beta1, beta2, beta3, gt_params_lhs, 
                    gt_params_rhs, gt_params_llhs, gt_params_rrhs, line_class,
-                   gt, idx, i, images, no_ortho, resize, save_path):
+                   gt, idx, i, images, no_ortho, resize, debug):
     M = M.data.cpu().numpy()[0]
     x = np.zeros(3)
 
@@ -120,15 +119,38 @@ def show_weightmap(train_or_val, M, M_inv, weightmap_zeros,
 
     im = images.permute(0, 2, 3, 1).data.cpu().numpy()[idx]
     im_orig = np.copy(im)
+    im_orig_for_detection = np.copy(im)
     gt_orig = gt.permute(0, 2, 3, 1).data.cpu().numpy()[idx, :, :, 0]
     im_orig = draw_homography_points(im_orig, x, resize)
 
     im, M_scaledup = test_projective_transform(im, resize, M)
 
-    im, _ = draw_fitted_line(im, gt_params_rhs[idx], resize, (0, 255, 0))
-    im, _ = draw_fitted_line(im, gt_params_lhs[idx], resize, (0, 255, 0))
+    im, gt_lane0 = draw_fitted_line(im, gt_params_rhs[idx], resize, (0, 255, 0))
+    im, gt_lane1 = draw_fitted_line(im, gt_params_lhs[idx], resize, (0, 255, 0))
     im, lane0 = draw_fitted_line(im, beta0[idx], resize, (255, 0, 0))
     im, lane1 = draw_fitted_line(im, beta1[idx], resize, (0, 0, 255))
+    left_pts = np.zeros((len(lane0),1,2))
+    right_pts = np.zeros((len(lane1),1,2))
+    gt_left_pts = np.zeros((len(gt_lane0),1,2))
+    gt_right_pts = np.zeros((len(gt_lane1),1,2))
+    for point_index in range(len(lane0)):
+        left_point = lane0[point_index]
+        right_point = lane1[point_index]
+        gt_left_point = gt_lane0[point_index]
+        gt_right_point = gt_lane1[point_index]
+        left_pts[point_index] = [left_point[0], left_point[1]]
+        right_pts[point_index] = [right_point[0], right_point[1]]
+        gt_left_pts[point_index] = [gt_left_point[0], gt_left_point[1]]
+        gt_right_pts[point_index] = [gt_right_point[0], gt_right_point[1]]
+
+    left_pts = np.float32(left_pts)
+    right_pts = np.float32(right_pts)
+    gt_left_pts = np.float32(gt_left_pts)
+    gt_right_pts = np.float32(gt_right_pts)
+    transformed_lane0 = cv2.perspectiveTransform(left_pts, M_inv)
+    transformed_lane1 = cv2.perspectiveTransform(right_pts, M_inv)
+    gt_transformed_lane0 = cv2.perspectiveTransform(gt_left_pts, M_inv)
+    gt_transformed_lane1 = cv2.perspectiveTransform(gt_right_pts, M_inv)
     if beta2 is not None:
         im, _ = draw_fitted_line(im, gt_params_llhs[idx], resize, (0, 255, 0))
         im, _ = draw_fitted_line(im, gt_params_rrhs[idx], resize, (0, 255, 0))
@@ -144,27 +166,40 @@ def show_weightmap(train_or_val, M, M_inv, weightmap_zeros,
         im_inverse = im_orig
 
     im_orig = np.clip(im_orig, 0, 1)
+    im_orig_for_detection = np.clip(im_orig_for_detection, 0, 1)
+    overlay = im_orig_for_detection.copy()
+    overlay = cv2.polylines(overlay, [np.int32(transformed_lane0)], isClosed = False, color = (255,0,0),thickness = 2)
+    overlay = cv2.polylines(overlay, [np.int32(transformed_lane1)], isClosed = False, color = (0,0,255),thickness = 2)
+    overlay = cv2.polylines(overlay, [np.int32(gt_transformed_lane0)], isClosed = False, color = (0,255,0),thickness = 2)
+    overlay = cv2.polylines(overlay, [np.int32(gt_transformed_lane1)], isClosed = False, color = (0,255,0),thickness = 2)
+    cv2.addWeighted(overlay, 0.6, im_orig_for_detection, 0.4, 0, im_orig_for_detection)
     im_inverse = np.clip(im_inverse, 0, 1)
     im = np.clip(im, 0, 1)
-
-    fig = plt.figure()
-    ax1 = fig.add_subplot(321)
-    ax2 = fig.add_subplot(322)
-    ax3 = fig.add_subplot(323)
-    ax4 = fig.add_subplot(324)
-    ax5 = fig.add_subplot(325)
-    ax1.imshow(im)
-    ax1.set_title('Birds eye view')
-    ax2.imshow(im_inverse)
-    ax2.set_title('Transformed birds eye view')
-    ax3.imshow(wm0_zeros/np.max(wm0_zeros)+wm1_zeros/np.max(wm1_zeros))
-    ax3.set_title('Left & Reft weight map zeros normalized')
-    ax4.imshow(im_orig)
-    ax4.set_title('Original image with homography points')
-    ax5.imshow(gt_orig)
-    ax5.set_title('Ground truth')
-    #fig.tight_layout()
-    plt.show()
+    if debug:
+        fig = plt.figure()
+        ax1 = fig.add_subplot(321)
+        ax2 = fig.add_subplot(322)
+        ax3 = fig.add_subplot(323)
+        ax4 = fig.add_subplot(324)
+        ax5 = fig.add_subplot(325)
+        ax6 = fig.add_subplot(326)
+        ax1.imshow(im)
+        ax1.set_title('Birds eye view')
+        ax2.imshow(im_inverse)
+        ax2.set_title('Transformed birds eye view')
+        ax3.imshow(wm0_zeros/np.max(wm0_zeros)+wm1_zeros/np.max(wm1_zeros))
+        ax3.set_title('Left & Reft weight map zeros normalized')
+        ax4.imshow(im_orig)
+        ax4.set_title('Original image with homography points')
+        ax5.imshow(gt_orig)
+        ax5.set_title('Ground truth')
+        ax6.imshow(im_orig_for_detection)
+        ax6.set_title('Detected lane')
+        plt.show()
+    r,g,b = cv2.split(im_orig_for_detection)
+    rgb_img = cv2.merge([b,g,r])
+    cv2.imshow("Detection with green GT", rgb_img)
+    cv2.waitKey(0)
 
 def save_weightmap(train_or_val, M, M_inv, weightmap_zeros,
                    beta0, beta1, beta2, beta3, gt_params_lhs, 
